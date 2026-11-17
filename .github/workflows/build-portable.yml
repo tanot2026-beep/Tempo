@@ -1,0 +1,54 @@
+name: Build portable Windows zip
+
+# Manual run: Actions tab > "Build portable Windows zip" > Run workflow.
+# The finished zip appears under "Artifacts" at the bottom of the run page.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Allow long paths
+        run: git config --system core.longpaths true
+
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, 1.95 or newer needed)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: portable-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Fetch OCR models (used by Scan & OCR)
+        run: cargo xtask models
+
+      - name: Build
+        run: cargo build --release -p pdfcraft
+
+      - name: Assemble portable folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory PdfCraft-Portable | Out-Null
+          Copy-Item target/release/pdfcraft.exe PdfCraft-Portable/
+          # portable.txt keeps settings and logs in PdfCraftData next to the exe.
+          Set-Content -Path PdfCraft-Portable/portable.txt -Value "portable"
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE PdfCraft-Portable/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PdfCraft-Portable-windows-x64
+          path: PdfCraft-Portable/
+          if-no-files-found: error
