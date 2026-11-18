@@ -38,6 +38,40 @@ jobs:
       - name: Build
         run: cargo build --release -p pdfcraft
 
+      - name: List the Windows DLLs and functions the exe imports
+        shell: pwsh
+        run: |
+          rustup component add llvm-tools
+          $sysroot = (rustc --print sysroot).Trim()
+          $readobj = Get-ChildItem -Path $sysroot -Recurse -Filter llvm-readobj.exe | Select-Object -First 1
+          if (-not $readobj) { throw "llvm-readobj.exe not found under $sysroot" }
+          & $readobj.FullName --coff-imports target/release/pdfcraft.exe | Out-File imports-raw.txt -Encoding utf8
+
+          # One block per imported DLL (normal imports and delay-loaded ones).
+          $dlls = [ordered]@{}
+          $name = $null
+          foreach ($line in Get-Content imports-raw.txt) {
+            if ($line -match '^\s*Name:\s*(\S+\.dll)\s*$') { $name = $Matches[1].ToLower(); if (-not $dlls.Contains($name)) { $dlls[$name] = New-Object System.Collections.Generic.List[string] } }
+            elseif ($name -and $line -match '^\s*Symbol:\s*(\S+)') { $dlls[$name].Add($Matches[1]) }
+          }
+          $out = New-Object System.Collections.Generic.List[string]
+          $out.Add("== Every imported DLL and how many functions are taken from it ==")
+          foreach ($k in $dlls.Keys) { $out.Add(("{0,-40} {1}" -f $k, $dlls[$k].Count)) }
+          foreach ($k in $dlls.Keys) {
+            if ($k -match 'wininet|winhttp|ws2_32|wsock32|mswsock|urlmon|dnsapi|iphlpapi|httpapi') {
+              $out.Add("")
+              $out.Add("== Functions imported from $k ==")
+              foreach ($f in ($dlls[$k] | Sort-Object -Unique)) { $out.Add($f) }
+            }
+          }
+          $out | Tee-Object -FilePath imports-report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: imports-report
+          path: imports-report.txt
+          if-no-files-found: error
+
       - name: Assemble portable folder
         shell: pwsh
         run: |
